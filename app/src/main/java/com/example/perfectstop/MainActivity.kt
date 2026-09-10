@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
@@ -65,20 +66,37 @@ class MainActivity : ComponentActivity() {
         insetsController.isAppearanceLightStatusBars = false
         insetsController.isAppearanceLightNavigationBars = false
 
-        requestRequiredPermissions()
-
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(primary = com.example.perfectstop.ui.NeonCyan)) {
-                if (permissionsReady && bluetoothReady && locationReady) PerfectStopApp(viewModel = viewModel)
-                else Surface(modifier = Modifier.fillMaxSize(), color = com.example.perfectstop.ui.BgDark) {
+            val gameState by viewModel.uiState.collectAsState()
+            val ready = permissionsReady && bluetoothReady && locationReady
+            val needsConnection = gameState.phase == com.example.perfectstop.model.GamePhase.LOBBY && gameState.role != com.example.perfectstop.model.GameRole.SOLO
+            var awaitingConnection by remember { mutableStateOf(false) }
+            LaunchedEffect(ready, needsConnection) {
+                if (!needsConnection) awaitingConnection = false
+                else if (!ready) awaitingConnection = true
+                else if (awaitingConnection) {
+                    awaitingConnection = false
+                    val name = com.example.perfectstop.model.UserProfile.getOrGenerateUsername(this@MainActivity)
+                    if (gameState.role == com.example.perfectstop.model.GameRole.HOST) viewModel.initAsHost(name)
+                    else viewModel.initAsClient(name)
+                }
+            }
+            SideEffect {
+                insetsController.isAppearanceLightStatusBars = !gameState.darkTheme
+                insetsController.isAppearanceLightNavigationBars = !gameState.darkTheme
+            }
+            com.example.perfectstop.theme.PerfectStopTheme(darkTheme = gameState.darkTheme) {
+                if (!needsConnection || ready) PerfectStopApp(viewModel = viewModel)
+                else Surface(modifier = Modifier.fillMaxSize()) {
+                    BackHandler { viewModel.confirmLeaveLobby() }
                     Column(Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(28.dp), verticalArrangement = Arrangement.Center) {
-                        Text("Ready to play?", style = MaterialTheme.typography.headlineLarge)
+                        Text("Bluetooth access", style = MaterialTheme.typography.headlineLarge)
                         Spacer(Modifier.height(16.dp))
-                        Text("Perfect Stop connects nearby phones without internet. Enable Bluetooth and nearby-device access before continuing.", style = MaterialTheme.typography.bodyLarge)
+                        Text("Allow access to connect nearby phones.", style = MaterialTheme.typography.bodyLarge)
                         Spacer(Modifier.height(24.dp))
-                        Text(if (permissionsReady) "✓ Permissions allowed" else "1. Allow nearby-device permissions")
+                        Text(if (permissionsReady) "Permissions allowed" else "Allow nearby-device permissions")
                         Spacer(Modifier.height(12.dp))
-                        Text(if (bluetoothReady) "✓ Bluetooth enabled" else "2. Turn on Bluetooth")
+                        Text(if (bluetoothReady) "Bluetooth enabled" else "Turn on Bluetooth")
                         if (!locationReady) Text("3. Enable Location for Bluetooth discovery on this Android version")
                         Spacer(Modifier.height(28.dp))
                         Button(onClick = {
@@ -93,6 +111,7 @@ class MainActivity : ComponentActivity() {
                         TextButton(onClick = { startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:$packageName"))) }) {
                             Text("Open app settings")
                         }
+                        TextButton(onClick = viewModel::confirmLeaveLobby) { Text("Back") }
                     }
                 }
             }

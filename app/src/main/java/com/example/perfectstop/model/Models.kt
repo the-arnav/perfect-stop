@@ -2,6 +2,8 @@ package com.example.perfectstop.model
 
 enum class GamePhase {
     MENU,
+    HISTORY,
+    LEADERBOARD,
     LOBBY,
     COUNTDOWN,
     RUNNING,
@@ -43,8 +45,10 @@ data class Player(
     val stoppedTimeMs: Long? = null,
     val deltaMs: Long? = null,
     val isStopped: Boolean = false,
-    val rank: Int = 0
+    val rank: Int = 0,
+    val identity: String = id
 ) {
+    val score: Int get() = TimingScore.points(deltaMs, stoppedTimeMs == -1L)
     val formattedDelta: String
         get() {
             val d = deltaMs ?: return "--"
@@ -66,6 +70,11 @@ data class Player(
         isStopped = false,
         rank = 0
     )
+}
+
+object TimingScore {
+    fun points(errorMs: Long?, invalid: Boolean = false): Int =
+        if (invalid || errorMs == null || errorMs !in -999L..999L) 0 else 1000 - kotlin.math.abs(errorMs).toInt()
 }
 
 data class JoinRequestNotification(
