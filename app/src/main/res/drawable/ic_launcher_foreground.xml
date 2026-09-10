@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Perfect Stop — Precision Monoscale Stopwatch Launcher Icon (Adaptive Foreground) -->
+<!-- Perfectly proportioned within the 66dp Android adaptive safe-zone circle -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Crown Stem -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M51.5,28 L56.5,28 L56.5,33 L51.5,33 Z" />
+
+    <!-- Crown Pusher Bar -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M46,25 C46,24.45 46.45,24 47,24 L61,24 C61.55,24 62,24.45 62,25 L62,27 C62,27.55 61.55,28 61,28 L47,28 C46.45,28 46,27.55 46,27 Z" />
+
+    <!-- Outer Stopwatch Ring -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4.5"
+        android:pathData="M54,33 A23,23 0 1,0 54,79 A23,23 0 1,0 54,33" />
+
+    <!-- Center Stop Needle (Vertical marker at 12 o'clock - 'Perfect Stop') -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M54,56 L54,39" />
+
+    <!-- Center Pivot Pin -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,52.5 A3.5,3.5 0 1,0 54,59.5 A3.5,3.5 0 1,0 54,52.5" />
+
+    <!-- Cardinal Ticks (3, 6, 9 o'clock) -->
+    <!-- 3 o'clock -->
+    <path
+        android:strokeColor="#A0FFFFFF"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:pathData="M71.5,56 L66.5,56" />
+
+    <!-- 9 o'clock -->
+    <path
+        android:strokeColor="#A0FFFFFF"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:pathData="M36.5,56 L41.5,56" />
+
+    <!-- 6 o'clock -->
+    <path
+        android:strokeColor="#A0FFFFFF"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:pathData="M54,73.5 L54,68.5" />
+
+</vector>
