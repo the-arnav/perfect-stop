@@ -12,6 +12,8 @@ import com.example.perfectstop.model.GameRole
 import com.example.perfectstop.model.JoinRequestNotification
 import com.example.perfectstop.model.Player
 import com.example.perfectstop.model.UserProfile
+import com.example.perfectstop.model.GameStore
+import com.example.perfectstop.model.PastGame
 import com.example.perfectstop.sensor.TapDetector
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -25,6 +27,10 @@ import kotlin.math.abs
 import kotlin.random.Random
 
 data class GameUiState(
+    val darkTheme: Boolean = true,
+    val history: List<PastGame> = emptyList(),
+    val reaction: Boolean = false,
+    val signalStage: Int = 0,
     val phase: GamePhase = GamePhase.MENU,
     val role: GameRole = GameRole.HOST,
     val localPlayerIndex: Int = 0,
@@ -47,7 +53,11 @@ data class GameUiState(
 class GameViewModel(application: Application) : AndroidViewModel(application) {
     val audioHaptics = AudioHapticEngine(application)
 
-    private val _uiState = MutableStateFlow(GameUiState())
+    private val store = GameStore(application)
+    private val secureRandom = java.security.SecureRandom()
+    private val peerIdentities = mutableMapOf<Int, String>()
+    private var roundId = ""
+    private val _uiState = MutableStateFlow(GameUiState(darkTheme = store.dark, history = store.read()))
     val uiState: StateFlow<GameUiState> = _uiState.asStateFlow()
 
     private var bleManager: BleManager? = null
@@ -56,6 +66,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private var matchJob: Job? = null
     private var countdownJob: Job? = null
     private var startEpochMs: Long = 0L
+    private var reactionCueEpochMs: Long? = null
 
     init {
         tapDetector = TapDetector(application) { accelG, rssi ->
@@ -121,6 +132,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = _uiState.value.copy(isAutoAcceptEnabled = !_uiState.value.isAutoAcceptEnabled)
     }
 
+    fun toggleTheme() { store.dark = !store.dark; _uiState.value = _uiState.value.copy(darkTheme = store.dark) }
+    fun showHistory() { _uiState.value = _uiState.value.copy(phase = GamePhase.HISTORY) }
+    fun showLeaderboard() { _uiState.value = _uiState.value.copy(phase = GamePhase.LEADERBOARD) }
+    fun showMenu() { _uiState.value = _uiState.value.copy(phase = GamePhase.MENU) }
+    fun setReaction(value: Boolean) {
+        if (_uiState.value.role != GameRole.CLIENT) _uiState.value = _uiState.value.copy(reaction = value)
+    }
+
     fun setBotDifficulty(difficulty: BotDifficulty) {
         _uiState.value = _uiState.value.copy(botDifficulty = difficulty)
     }
@@ -142,6 +161,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         bleManager?.stop()
 
         _uiState.value = GameUiState(
+            darkTheme = store.dark,
+            history = store.read(),
             phase = GamePhase.MENU,
             isSoundEnabled = _uiState.value.isSoundEnabled,
             isHapticsEnabled = _uiState.value.isHapticsEnabled,
@@ -155,7 +176,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val finalName = if (playerName.isBlank()) UserProfile.getOrGenerateUsername(getApplication()) else playerName
         UserProfile.saveUsername(getApplication(), finalName)
 
-        val host = Player(0, "host", finalName, isHost = true)
+        val host = Player(0, "host", finalName, isHost = true, identity = store.identity)
         _uiState.value = _uiState.value.copy(
             phase = GamePhase.LOBBY,
             role = GameRole.HOST,
@@ -171,7 +192,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val finalName = if (playerName.isBlank()) UserProfile.getOrGenerateUsername(getApplication()) else playerName
         UserProfile.saveUsername(getApplication(), finalName)
 
-        val client = Player(1, "client", finalName, isHost = false)
+        val client = Player(1, "client", finalName, isHost = false, identity = store.identity)
         _uiState.value = _uiState.value.copy(
             phase = GamePhase.LOBBY,
             role = GameRole.CLIENT,
@@ -187,9 +208,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val finalName = if (playerName.isBlank()) UserProfile.getOrGenerateUsername(getApplication()) else playerName
         UserProfile.saveUsername(getApplication(), finalName)
 
-        val p0 = Player(0, "p0", finalName, isHost = true)
-        val b1 = Player(1, "b1", "CyberBot α")
-        val b2 = Player(2, "b2", "NanoBot β")
+        val p0 = Player(0, "p0", finalName, isHost = true, identity = store.identity)
+        val b1 = Player(1, "b1", "Practice A")
+        val b2 = Player(2, "b2", "Practice B")
         _uiState.value = _uiState.value.copy(
             phase = GamePhase.LOBBY,
             role = GameRole.SOLO,
@@ -210,7 +231,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (_uiState.value.role != GameRole.CLIENT) return
         val local = _uiState.value.players.firstOrNull { it.index == _uiState.value.localPlayerIndex }
         val name = local?.name ?: UserProfile.getOrGenerateUsername(getApplication())
-        val pkt = bleManager?.buildJoinRequest(Random.nextInt(1, 255), name) ?: return
+        val pkt = bleManager?.buildJoinRequest(1, name, store.identity) ?: return
         bleManager?.sendPacketFromClient(pkt)
     }
 
@@ -236,7 +257,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (_uiState.value.players.size >= 4) return
         val current = _uiState.value.players.toMutableList()
         val newIndex = (1..3).firstOrNull { index -> current.none { it.index == index } } ?: return
-        val newPlayer = Player(newIndex, "peer_$peerId", playerName)
+        val newPlayer = Player(newIndex, "peer_$peerId", playerName, identity = peerIdentities[peerId] ?: "peer_$peerId")
         bleManager?.assignPlayer(peerId, newIndex)
         current.add(newPlayer)
 
@@ -276,7 +297,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             BleManager.OPCODE_JOIN_REQUEST -> {
                 if (_uiState.value.role == GameRole.HOST && _uiState.value.phase == GamePhase.LOBBY) {
                     val pId = if (bytes.size > 1) bytes[1].toInt() and 0xFF else 1
-                    if (bytes.size < 3 || bytes.size != 3 + (bytes[2].toInt() and 255)) return
+                    if (bytes.size < 3) return
+                    val endName = 3 + (bytes[2].toInt() and 255)
+                    if (bytes.size != endName + 16) return
+                    val identityBuffer = ByteBuffer.wrap(bytes, endName, 16)
+                    peerIdentities[pId] = java.util.UUID(identityBuffer.long, identityBuffer.long).toString()
                     if (_uiState.value.players.any { it.id == "peer_$pId" }) {
                         addPlayerToHost("", pId)
                         return
@@ -336,7 +361,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     val cycle = 1L shl 32
                     val candidate = (hostNow and (cycle - 1).inv()) or low
                     val deadline = listOf(candidate - cycle, candidate, candidate + cycle).minBy { abs(it - hostNow) }
-                    val countdownMs = (deadline - hostNow).coerceIn(0, 5000).toInt()
+                    val countdownMs = (deadline - hostNow).coerceIn(0, 10000).toInt()
+                    _uiState.value = _uiState.value.copy(reaction = target == 0)
                     val blind = buf.get(7).toInt() != 0
                     startRoundSequence(target, countdownMs, blind)
                 }
@@ -346,7 +372,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 if (bytes.size >= 6) {
                     val buf = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN)
                     val pIdx = buf.get(1).toInt() and 0xFF
-                    val stopped = buf.getInt(2).toLong() and 0xFFFFFFFFL
+                    val stopped = buf.getInt(2).toLong()
                     recordPlayerStop(pIdx, stopped)
 
                     if (_uiState.value.role == GameRole.HOST) {
@@ -367,9 +393,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun startRound() {
         if (_uiState.value.role == GameRole.CLIENT || _uiState.value.phase != GamePhase.LOBBY) return
         if (_uiState.value.role == GameRole.HOST && _uiState.value.players.size < 2) return
-        val targets = listOf(5000, 6500, 7500, 8000, 9250, 10000)
-        val target = targets.random()
-        val countdownDurationMs = 3000
+        val target = if (_uiState.value.reaction) 0 else 4000 + secureRandom.nextInt(11001)
+        val countdownDurationMs = if (_uiState.value.reaction) 3500 + secureRandom.nextInt(4501) else 3000
 
         // Broadcast to clients with burst redundancy
         val pkt = bleManager?.buildStartRound(target, (android.os.SystemClock.elapsedRealtime() + countdownDurationMs).toInt(), _uiState.value.isBlindMode)
@@ -380,11 +405,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun startRoundSequence(target: Int, countdownMs: Int, blindMode: Boolean) {
+        roundId = java.util.UUID.randomUUID().toString()
         val resetPlayers = _uiState.value.players.map { it.withReset() }
         startEpochMs = android.os.SystemClock.elapsedRealtime() + countdownMs
+        reactionCueEpochMs = null
 
         _uiState.value = _uiState.value.copy(
             phase = GamePhase.COUNTDOWN,
+            signalStage = 0,
             players = resetPlayers,
             targetTimeMs = target,
             isBlindMode = blindMode,
@@ -392,24 +420,28 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             elapsedTimeMs = 0L
         )
 
-        audioHaptics.playBeepCountdown()
+        if (!_uiState.value.reaction) audioHaptics.playBeepCountdown()
 
         // Latency-compensated countdown anchored to startEpochMs
         countdownJob?.cancel()
         countdownJob = viewModelScope.launch {
             while (true) {
                 val remainingMs = startEpochMs - android.os.SystemClock.elapsedRealtime()
+                if (_uiState.value.reaction) {
+                    val stage = if (countdownMs - remainingMs >= 1500) 1 else 0
+                    if (_uiState.value.signalStage != stage) _uiState.value = _uiState.value.copy(signalStage = stage)
+                }
                 if (remainingMs <= 0L) {
                     // GO!
-                    audioHaptics.playBeepGo()
+                    if (!_uiState.value.reaction) audioHaptics.playBeepGo()
                     _uiState.value = _uiState.value.copy(countdownNumber = 0)
                     beginRunningStopwatch()
                     break
                 } else if (remainingMs <= 1000L && _uiState.value.countdownNumber != 1) {
-                    audioHaptics.playBeepCountdown()
+                    if (!_uiState.value.reaction) audioHaptics.playBeepCountdown()
                     _uiState.value = _uiState.value.copy(countdownNumber = 1)
                 } else if (remainingMs in 1001L..2000L && _uiState.value.countdownNumber != 2) {
-                    audioHaptics.playBeepCountdown()
+                    if (!_uiState.value.reaction) audioHaptics.playBeepCountdown()
                     _uiState.value = _uiState.value.copy(countdownNumber = 2)
                 } else if (remainingMs > 2000L && _uiState.value.countdownNumber != 3) {
                     _uiState.value = _uiState.value.copy(countdownNumber = 3)
@@ -420,7 +452,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun beginRunningStopwatch() {
-        _uiState.value = _uiState.value.copy(phase = GamePhase.RUNNING)
+        _uiState.value = _uiState.value.copy(signalStage = 2, phase = if (_uiState.value.players.firstOrNull { it.index == _uiState.value.localPlayerIndex }?.isStopped == true) GamePhase.PLAYER_STOPPED else GamePhase.RUNNING)
 
         matchJob?.cancel()
         matchJob = viewModelScope.launch {
@@ -428,10 +460,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             while (_uiState.value.phase == GamePhase.RUNNING || _uiState.value.phase == GamePhase.PLAYER_STOPPED) {
                 val elapsed = android.os.SystemClock.elapsedRealtime() - startEpochMs
                 val safeElapsed = if (elapsed < 0L) 0L else elapsed
-                _uiState.value = _uiState.value.copy(elapsedTimeMs = safeElapsed)
+                val displayedElapsed = if (_uiState.value.reaction) reactionCueEpochMs?.let {
+                    (android.os.SystemClock.elapsedRealtime() - it).coerceAtLeast(0)
+                } ?: 0L else safeElapsed
+                _uiState.value = _uiState.value.copy(elapsedTimeMs = displayedElapsed)
 
                 // Rhythmic tick every 500ms
-                if (safeElapsed / 500 != lastTickSec) {
+                if (!_uiState.value.reaction && !(_uiState.value.isBlindMode && safeElapsed >= 3000) && safeElapsed / 500 != lastTickSec) {
                     lastTickSec = safeElapsed / 500
                     audioHaptics.playTick()
                     audioHaptics.triggerSubtleTick()
@@ -442,7 +477,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     val varianceRange = _uiState.value.botDifficulty.varianceMs
                     _uiState.value.players.filter { it.index != _uiState.value.localPlayerIndex && !it.isStopped }.forEach { bot ->
                         val botOffset = if (bot.index == 1) -varianceRange / 2 else varianceRange / 3
-                        val botTarget = _uiState.value.targetTimeMs + botOffset
+                        val botTarget = if (_uiState.value.reaction) 250 + botOffset else _uiState.value.targetTimeMs + botOffset
                         if (safeElapsed >= botTarget) {
                             recordPlayerStop(bot.index, safeElapsed)
                         }
@@ -453,9 +488,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 if (_uiState.value.role != GameRole.CLIENT && safeElapsed >= _uiState.value.targetTimeMs + 4000L) {
                     _uiState.value.players.filter { !it.isStopped }.forEach {
                         if (_uiState.value.role == GameRole.HOST) {
-                            bleManager?.broadcastPacketFromHost(bleManager!!.buildPlayerStop(it.index, safeElapsed))
+                            bleManager?.broadcastPacketFromHost(bleManager!!.buildPlayerStop(it.index, if (_uiState.value.reaction) -1 else safeElapsed))
                         }
-                        recordPlayerStop(it.index, safeElapsed)
+                            recordPlayerStop(it.index, if (_uiState.value.reaction) -1 else safeElapsed)
                     }
                 }
 
@@ -464,9 +499,23 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Anchor local reaction measurement to drawing the green cue, not coroutine wake-up. */
+    fun onGreenDrawn() {
+        if (_uiState.value.reaction && reactionCueEpochMs == null && _uiState.value.phase in listOf(GamePhase.RUNNING, GamePhase.PLAYER_STOPPED)) {
+            reactionCueEpochMs = android.os.SystemClock.elapsedRealtime()
+            audioHaptics.playBeepGo()
+        }
+    }
+
     fun pressStopButton() {
+        if (_uiState.value.reaction && (_uiState.value.phase == GamePhase.COUNTDOWN || (_uiState.value.phase == GamePhase.RUNNING && reactionCueEpochMs == null))) {
+            recordPlayerStop(_uiState.value.localPlayerIndex, -1)
+            val packet = bleManager?.buildPlayerStop(_uiState.value.localPlayerIndex, -1) ?: return
+            if (_uiState.value.role == GameRole.HOST) bleManager?.broadcastPacketFromHost(packet) else if (_uiState.value.role == GameRole.CLIENT) bleManager?.sendPacketFromClient(packet)
+            return
+        }
         if (_uiState.value.phase != GamePhase.RUNNING) return
-        val stopped = (android.os.SystemClock.elapsedRealtime() - startEpochMs).coerceAtLeast(0)
+        val stopped = (android.os.SystemClock.elapsedRealtime() - (if (_uiState.value.reaction) reactionCueEpochMs ?: return else startEpochMs)).coerceAtLeast(0)
 
         audioHaptics.playStopSlam()
         audioHaptics.triggerMechanicalStopClick()
@@ -485,8 +534,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun recordPlayerStop(pIdx: Int, stoppedMs: Long) {
-        if (_uiState.value.phase !in listOf(GamePhase.RUNNING, GamePhase.PLAYER_STOPPED)) return
-        if (stoppedMs !in 0..(_uiState.value.targetTimeMs + 4500L)) return
+        if (_uiState.value.phase !in listOf(GamePhase.RUNNING, GamePhase.PLAYER_STOPPED) && !(_uiState.value.reaction && _uiState.value.phase == GamePhase.COUNTDOWN)) return
+        if (stoppedMs !in 0..(_uiState.value.targetTimeMs + 4500L) && !(_uiState.value.reaction && stoppedMs == -1L)) return
         if (_uiState.value.players.none { it.index == pIdx && !it.isStopped }) return
         val updated = _uiState.value.players.map { p ->
             if (p.index == pIdx) {
@@ -510,11 +559,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun transitionToResults() {
         matchJob?.cancel()
+        countdownJob?.cancel()
         val list = _uiState.value.players
-        val sorted = list.sortedBy { abs(it.deltaMs ?: 999999L) }
+        val sorted = list.sortedBy { if (it.stoppedTimeMs == -1L) Long.MAX_VALUE else abs(it.deltaMs ?: 999999L) }
 
         val rankedList = list.map { p ->
-            val rank = sorted.indexOfFirst { it.index == p.index } + 1
+            val rank = sorted.indexOfFirst { it.stoppedTimeMs == p.stoppedTimeMs || (it.stoppedTimeMs != -1L && p.stoppedTimeMs != -1L && abs(it.deltaMs ?: 999999L) == abs(p.deltaMs ?: 999999L)) } + 1
             p.copy(rank = rank)
         }
 
@@ -522,7 +572,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = _uiState.value.copy(
             phase = GamePhase.RESULTS,
             players = rankedList,
-            winner = rankedList.minByOrNull { abs(it.deltaMs ?: 999999L) }
+            winner = rankedList.filter { it.stoppedTimeMs != -1L }.minByOrNull { abs(it.deltaMs ?: 999999L) },
+            history = store.save(PastGame(roundId, System.currentTimeMillis(), if (_uiState.value.reaction) "Reaction" else if (_uiState.value.isBlindMode) "Blind" else "Target", _uiState.value.targetTimeMs, store.identity, rankedList))
         )
     }
 

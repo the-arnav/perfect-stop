@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.PerfectStop" parent="android:Theme.Material.NoActionBar">
-        <!-- Deep dark background matching the app's BgDark canvas (#12131A) -->
-        <item name="android:windowBackground">#12131A</item>
+        <item name="android:windowBackground">#000000</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>
