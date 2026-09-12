@@ -137,7 +137,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun showLeaderboard() { _uiState.value = _uiState.value.copy(phase = GamePhase.LEADERBOARD) }
     fun showMenu() { _uiState.value = _uiState.value.copy(phase = GamePhase.MENU) }
     fun setReaction(value: Boolean) {
-        if (_uiState.value.role != GameRole.CLIENT) _uiState.value = _uiState.value.copy(reaction = value)
+        if (_uiState.value.role != GameRole.CLIENT) _uiState.value = _uiState.value.copy(
+            reaction = value,
+            players = _uiState.value.players.map { player ->
+                if (_uiState.value.role == GameRole.SOLO && player.id in listOf("b1", "b2"))
+                    player.copy(name = if (value) {
+                        if (player.id == "b1") "Max Verstappen" else "Lewis Hamilton"
+                    } else if (player.id == "b1") "Nikola Tesla" else "Isaac Newton")
+                else player
+            }
+        )
     }
 
     fun setBotDifficulty(difficulty: BotDifficulty) {
@@ -209,8 +218,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         UserProfile.saveUsername(getApplication(), finalName)
 
         val p0 = Player(0, "p0", finalName, isHost = true, identity = store.identity)
-        val b1 = Player(1, "b1", "Practice A")
-        val b2 = Player(2, "b2", "Practice B")
+        val b1 = Player(1, "b1", if (_uiState.value.reaction) "Max Verstappen" else "Nikola Tesla")
+        val b2 = Player(2, "b2", if (_uiState.value.reaction) "Lewis Hamilton" else "Isaac Newton")
         _uiState.value = _uiState.value.copy(
             phase = GamePhase.LOBBY,
             role = GameRole.SOLO,
@@ -477,7 +486,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     val varianceRange = _uiState.value.botDifficulty.varianceMs
                     _uiState.value.players.filter { it.index != _uiState.value.localPlayerIndex && !it.isStopped }.forEach { bot ->
                         val botOffset = if (bot.index == 1) -varianceRange / 2 else varianceRange / 3
-                        val botTarget = if (_uiState.value.reaction) 250 + botOffset else _uiState.value.targetTimeMs + botOffset
+                        val reactionBase = when (_uiState.value.botDifficulty) {
+                            BotDifficulty.CASUAL -> 420
+                            BotDifficulty.VETERAN -> 280
+                            BotDifficulty.PRO -> 180
+                        }
+                        val botTarget = if (_uiState.value.reaction) reactionBase + botOffset else _uiState.value.targetTimeMs + botOffset
                         if (safeElapsed >= botTarget) {
                             recordPlayerStop(bot.index, safeElapsed)
                         }

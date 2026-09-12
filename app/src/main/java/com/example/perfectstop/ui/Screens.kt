@@ -4,6 +4,11 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
+import kotlin.math.roundToInt
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -49,20 +54,20 @@ fun PerfectStopApp(viewModel: GameViewModel) {
     Surface(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(horizontal = 24.dp)) {
             Row(Modifier.fillMaxWidth().heightIn(min = 64.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (state.phase != GamePhase.MENU) TextButton(onClick = {
+                if (state.phase != GamePhase.MENU) IconButton(onClick = {
                     if (state.phase in listOf(GamePhase.HISTORY, GamePhase.LEADERBOARD)) viewModel.showMenu()
                     else viewModel.requestLeaveLobby()
-                }) { Text("Back") }
+                }) { GameIcon(GameGlyph.BACK, label = "Back") }
                 Text(when (state.phase) {
                     GamePhase.MENU -> "Perfect Stop"
                     GamePhase.HISTORY -> "History"
                     GamePhase.LEADERBOARD -> "Leaderboard"
-                    GamePhase.LOBBY -> "Lobby"
+                    GamePhase.LOBBY -> if (state.role == GameRole.SOLO) "Practice" else "Lobby"
                     GamePhase.RESULTS -> "Results"
-                    else -> if (state.reaction) "Reaction" else if (state.isBlindMode) "Blind" else "Target"
+                    else -> if (state.reaction) "Signals" else if (state.isBlindMode) "Blind" else "Target"
                 }, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f))
-                TextButton(onClick = viewModel::toggleTheme) { Text(if (state.darkTheme) "Light" else "Dark") }
+                IconButton(onClick = viewModel::toggleTheme) { GameIcon(if (state.darkTheme) GameGlyph.SUN else GameGlyph.MOON, label = if (state.darkTheme) "Switch to light theme" else "Switch to dark theme") }
             }
             HorizontalDivider()
             when (state.phase) {
@@ -95,31 +100,55 @@ fun PerfectStopApp(viewModel: GameViewModel) {
 @Composable private fun Menu(vm: GameViewModel) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var name by rememberSaveable { mutableStateOf(UserProfile.getOrGenerateUsername(context)) }
-    Column(Modifier.verticalScroll(rememberScrollState()).padding(vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        OutlinedTextField(name, onValueChange = { name = it.take(16); UserProfile.saveUsername(context, name) },
-            modifier = Modifier.fillMaxWidth(), label = { Text("Player name") }, singleLine = true,
-            shape = RoundedCornerShape(4.dp))
-        Spacer(Modifier.height(8.dp))
-        Action("Host game") { vm.initAsHost(name) }
-        OutlinedButton(onClick = { vm.initAsClient(name) }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp), shape = RoundedCornerShape(4.dp)) { Text("Join game") }
-        MenuRow("Practice") { vm.initSolo(name); vm.setReaction(false) }
-        MenuRow("Reaction") { vm.initSolo(name); vm.setReaction(true) }
-        MenuRow("History") { vm.showHistory() }
-        MenuRow("Leaderboard") { vm.showLeaderboard() }
-    }
-}
-
-@Composable private fun MenuRow(label: String, onClick: () -> Unit) {
-    Column {
-        Row(Modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(label, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-            val color = MaterialTheme.colorScheme.onSurface
-            Canvas(Modifier.size(18.dp)) {
-                drawLine(color, Offset(size.width * .35f, size.height * .2f), Offset(size.width * .65f, size.height * .5f), 2.dp.toPx())
-                drawLine(color, Offset(size.width * .65f, size.height * .5f), Offset(size.width * .35f, size.height * .8f), 2.dp.toPx())
+    var editingName by rememberSaveable { mutableStateOf(false) }
+    var mode by rememberSaveable { mutableStateOf("Target") }
+    fun configure() { vm.setReaction(mode == "Reaction"); vm.toggleBlindMode(mode == "Blind") }
+    Column(Modifier.verticalScroll(rememberScrollState()).padding(vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            GameIcon(GameGlyph.PERSON, Modifier.size(22.dp))
+            Text(name, Modifier.weight(1f).padding(start = 12.dp), style = MaterialTheme.typography.titleMedium)
+            IconButton(onClick = { editingName = !editingName }) { GameIcon(GameGlyph.EDIT, label = "Edit player name") }
+        }
+        if (editingName) OutlinedTextField(name, onValueChange = { name = it.take(16); UserProfile.saveUsername(context, name) },
+            modifier = Modifier.fillMaxWidth(), label = { Text("Player name") }, singleLine = true, shape = RoundedCornerShape(4.dp))
+        Modes(mode) { mode = it }
+        ModeStage(mode)
+        Action("Practice") { vm.initSolo(name); configure() }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedButton(onClick = { vm.initAsHost(name); configure() }, modifier = Modifier.weight(1f).heightIn(min = 56.dp), shape = RoundedCornerShape(6.dp)) {
+                GameIcon(GameGlyph.BLUETOOTH, Modifier.size(20.dp)); Spacer(Modifier.width(8.dp)); Text("Host")
+            }
+            OutlinedButton(onClick = { vm.initAsClient(name) }, modifier = Modifier.weight(1f).heightIn(min = 56.dp), shape = RoundedCornerShape(6.dp)) {
+                GameIcon(GameGlyph.ARROW, Modifier.size(20.dp)); Spacer(Modifier.width(8.dp)); Text("Join")
             }
         }
         HorizontalDivider()
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            NavigationTile("History", GameGlyph.HISTORY, Modifier.weight(1f), vm::showHistory)
+            NavigationTile("Leaderboard", GameGlyph.TROPHY, Modifier.weight(1f), vm::showLeaderboard)
+        }
+    }
+}
+
+@Composable private fun NavigationTile(title: String, glyph: GameGlyph, modifier: Modifier, onClick: () -> Unit) {
+    Surface(onClick = onClick, modifier = modifier, shape = RoundedCornerShape(6.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            GameIcon(glyph, Modifier.size(26.dp))
+            Text(title, style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+@Composable private fun ModeStage(mode: String, compact: Boolean = false) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        if (mode == "Reaction") SignalLights(-1, Modifier.fillMaxWidth().height(if (compact) 130.dp else 190.dp))
+        else TimingDial(mode == "Blind", Modifier.size(if (compact) 130.dp else 190.dp))
+        if (!compact) {
+            Text(if (mode == "Reaction") "Signals" else mode, fontSize = 32.sp, fontWeight = FontWeight.SemiBold)
+            if (mode != "Reaction") Text(if (mode == "Blind") "Hidden after 3.000 s" else "4.000–15.000 s",
+                Modifier.padding(top = 6.dp), fontFamily = FontFamily.Monospace, fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
@@ -131,10 +160,39 @@ fun PerfectStopApp(viewModel: GameViewModel) {
 }
 
 @Composable private fun Modes(selected: String, onSelect: (String) -> Unit) {
-    FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         listOf("Target", "Blind", "Reaction").forEach { mode ->
-            FilterChip(selected == mode, { onSelect(mode) }, label = { Text(mode, fontSize = 13.sp) }, shape = RoundedCornerShape(4.dp))
+            val active = selected == mode
+            Column(Modifier.weight(1f).selectable(active, role = Role.Tab, onClick = { onSelect(mode) })
+                .padding(top = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                GameIcon(when(mode) { "Target" -> GameGlyph.TIMER; "Blind" -> GameGlyph.BLIND; else -> GameGlyph.SIGNAL },
+                    Modifier.size(22.dp), color = if (active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(if (mode == "Reaction") "Signals" else mode, fontSize = 13.sp, fontWeight = if(active) FontWeight.Bold else FontWeight.Normal)
+                Box(Modifier.fillMaxWidth().height(2.dp).background(if(active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outlineVariant))
+            }
         }
+    }
+}
+
+@Composable private fun DifficultyControl(selected: BotDifficulty, onSelect: (BotDifficulty) -> Unit) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Difficulty", style = MaterialTheme.typography.titleMedium)
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.surfaceVariant).padding(4.dp).selectableGroup()) {
+            BotDifficulty.entries.forEach { level ->
+                val active = level == selected
+                Box(Modifier.weight(1f).clip(RoundedCornerShape(4.dp))
+                    .background(if(active) MaterialTheme.colorScheme.onSurface else Color.Transparent)
+                    .selectable(active, role = Role.Tab, onClick = { onSelect(level) }).heightIn(min = 48.dp).padding(horizontal = 4.dp, vertical = 10.dp), contentAlignment = Alignment.Center) {
+                    Text(level.name.lowercase().replaceFirstChar { it.uppercase() }, fontSize = 13.sp,
+                        color = if(active) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = if(active) FontWeight.SemiBold else FontWeight.Normal)
+                }
+            }
+        }
+        Slider(value = selected.ordinal.toFloat(), onValueChange = { onSelect(BotDifficulty.entries[it.roundToInt().coerceIn(0,2)]) },
+            valueRange = 0f..2f, steps = 1, modifier = Modifier.fillMaxWidth().semantics {
+                contentDescription = "Bot difficulty"; stateDescription = selected.name.lowercase()
+            })
     }
 }
 
@@ -155,27 +213,42 @@ fun PerfectStopApp(viewModel: GameViewModel) {
         if (state.role != GameRole.CLIENT) Modes(if (state.reaction) "Reaction" else if (state.isBlindMode) "Blind" else "Target") {
             vm.setReaction(it == "Reaction"); vm.toggleBlindMode(it == "Blind")
         }
-        if (state.reaction) SignalLights(-1, Modifier.fillMaxWidth().height(180.dp))
+        if (state.role != GameRole.CLIENT) ModeStage(if (state.reaction) "Reaction" else if (state.isBlindMode) "Blind" else "Target", compact = true)
+        Text(if (state.role == GameRole.SOLO) "Line-up" else "Players", style = MaterialTheme.typography.titleMedium)
         state.players.forEach { player ->
-            Row(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
-                Text(player.name, Modifier.weight(1f), fontWeight = FontWeight.Medium)
-                Text(if (player.index == state.localPlayerIndex) "You" else if (player.isHost) "Host" else "Ready", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            HorizontalDivider()
-        }
-        if (state.role == GameRole.SOLO) {
-            Text("Difficulty", style = MaterialTheme.typography.titleMedium)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                BotDifficulty.entries.forEach { difficulty ->
-                    FilterChip(state.botDifficulty == difficulty, { vm.setBotDifficulty(difficulty) }, label = { Text(difficulty.name.lowercase().replaceFirstChar { it.uppercase() }) }, shape = RoundedCornerShape(4.dp))
+            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(44.dp).clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
+                    if (player.id in listOf("b1", "b2")) Text(player.name.split(" ").mapNotNull { it.firstOrNull() }.take(2).joinToString(""), fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium)
+                    else GameIcon(GameGlyph.PERSON, Modifier.size(22.dp))
                 }
+                Text(player.name, Modifier.weight(1f).padding(horizontal = 12.dp), fontWeight = FontWeight.Medium)
+                Text(if (player.index == state.localPlayerIndex) "You" else if (state.role == GameRole.SOLO) "Bot" else if (player.isHost) "Host" else "Ready", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        Toggle("Sound", state.isSoundEnabled, vm::toggleSound)
-        Toggle("Haptics", state.isHapticsEnabled, vm::toggleHaptics)
+        Spacer(Modifier.height(8.dp))
+        if (state.role == GameRole.SOLO) {
+            DifficultyControl(state.botDifficulty, vm::setBotDifficulty)
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            SettingButton("Sound", GameGlyph.SOUND, state.isSoundEnabled, Modifier.weight(1f), vm::toggleSound)
+            SettingButton("Haptics", GameGlyph.HAPTIC, state.isHapticsEnabled, Modifier.weight(1f), vm::toggleHaptics)
+        }
         if (state.role == GameRole.HOST) Toggle("Accept players automatically", state.isAutoAcceptEnabled, vm::toggleAutoAccept)
         if (state.role != GameRole.CLIENT) Action("Start", state.role == GameRole.SOLO || state.players.size >= 2, vm::startRound)
         else if (!state.isHostDisconnectedBannerVisible) Text("Waiting for host", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable private fun SettingButton(label: String, glyph: GameGlyph, checked: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    Surface(onClick = onClick, modifier = modifier.semantics { stateDescription = if(checked) "On" else "Off" },
+        shape = RoundedCornerShape(6.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            GameIcon(glyph, Modifier.size(20.dp), color = if(checked) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(Modifier.weight(1f)) {
+                Text(label, fontSize = 13.sp)
+                Text(if(checked) "On" else "Off", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
     }
 }
 
@@ -259,7 +332,14 @@ fun PerfectStopApp(viewModel: GameViewModel) {
 @Composable private fun Results(vm: GameViewModel, state: GameUiState) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         val local = state.players.firstOrNull { it.index == state.localPlayerIndex }
-        Text("${local?.score ?: 0} pts", fontSize = 48.sp, fontFamily = FontFamily.Monospace)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            GameIcon(GameGlyph.TROPHY, Modifier.size(40.dp))
+            Column(Modifier.weight(1f)) {
+                Text("${local?.score ?: 0}", fontSize = 48.sp, fontFamily = FontFamily.Monospace)
+                Text("Points", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Text("#${local?.rank ?: 0}", fontSize = 28.sp, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         if (!state.reaction) Text("Target ${seconds(state.targetTimeMs.toLong())} s", color = MaterialTheme.colorScheme.onSurfaceVariant)
         state.players.sortedBy { it.rank }.forEach { PlayerResult(it, state.reaction) }
         if (state.role != GameRole.CLIENT) Action("Play again", onClick = vm::playAgain)
@@ -276,8 +356,9 @@ fun PerfectStopApp(viewModel: GameViewModel) {
             val local = game.players.firstOrNull { it.identity == game.localIdentity }
             Column {
                 Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    GameIcon(when(game.mode) { "Reaction" -> GameGlyph.SIGNAL; "Blind" -> GameGlyph.BLIND; else -> GameGlyph.TIMER }, Modifier.padding(end = 14.dp).size(24.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(game.mode, style = MaterialTheme.typography.titleMedium)
+                        Text(if(game.mode == "Reaction") "Signals" else game.mode, style = MaterialTheme.typography.titleMedium)
                         Text(format.format(Date(game.date)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Text("${local?.score ?: 0} pts", fontFamily = FontFamily.Monospace)
